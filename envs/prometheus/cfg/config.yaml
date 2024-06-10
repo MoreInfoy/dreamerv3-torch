@@ -1,14 +1,15 @@
 name: "humanoid_locomotion"
-headless: False
+headless: True
 test: False
 export_policy: True
-num_envs: 4096
+num_envs: 24
 env_dt: 0.01
 # set default task and default training config based on task
 defaults:
   - task: loco
   - sim: sim
   - env: limx
+  - train: train
   - override hydra/job_logging: disabled
   - _self_
 

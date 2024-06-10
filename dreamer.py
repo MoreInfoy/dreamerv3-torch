@@ -3,7 +3,9 @@ import functools
 import os
 import pathlib
 import sys
-
+from envs.prometheus.core.env.humanoid import HumanoidTaskEnv
+from envs.prometheus.core.sim.isaacsim import IsaacSim
+from envs.prometheus.core.task.locomotion import Locomotion
 # os.environ["MUJOCO_GL"] = "osmesa"
 
 import numpy as np
@@ -16,10 +18,12 @@ import models
 import tools
 import envs.wrappers as wrappers
 from parallel import Parallel, Damy
-
+import hydra
+from omegaconf import DictConfig, OmegaConf
 import torch
 from torch import nn
 from torch import distributions as torchd
+from envs.prometheus import SOURCE_DIR
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -142,34 +146,17 @@ def make_dataset(episodes, config):
     return dataset
 
 
-def make_env(config, mode, id):
-    suite, task = config.task.split("_", 1)
-    if suite == "dmc":
-        import envs.dmc as dmc
-        env = dmc.DeepMindControl(
-            task, config.action_repeat, config.size, seed=config.seed + id
-        )
-        env = wrappers.NormalizeActions(env)
-    if suite == "isaac":
-        from envs.prometheus.core.env.humanoid import HumanoidTaskEnv
-        from envs.prometheus.core.sim.isaacsim import IsaacSim
-        from envs.prometheus.core.task.locomotion import Locomotion
-
-        env = dmc.DeepMindControl(
-            task, config.action_repeat, config.size, seed=config.seed + id
-        )
-        env = wrappers.NormalizeActions(env)
-    else:
-        raise NotImplementedError(suite)
-    env = wrappers.TimeLimit(env, config.time_limit)
+def make_env(config):
+    sim = IsaacSim(config.sim)
+    env = HumanoidTaskEnv(sim, Locomotion(sim, config.task), config.env)
     env = wrappers.SelectAction(env, key="action")
     env = wrappers.UUID(env)
-    if suite == "minecraft":
-        env = wrappers.RewardObs(env)
     return env
 
 
-def main(config):
+@hydra.main(version_base=None, config_name="config", config_path=os.path.join(SOURCE_DIR, "cfg"))
+def main(cfg: DictConfig) -> None:
+    config = cfg.train
     tools.set_seed_everywhere(config.seed)
     if config.deterministic_run:
         tools.enable_deterministic_run()
@@ -179,7 +166,6 @@ def main(config):
     config.steps //= config.action_repeat
     config.eval_every //= config.action_repeat
     config.log_every //= config.action_repeat
-    config.time_limit //= config.action_repeat
 
     print("Logdir", logdir)
     logdir.mkdir(parents=True, exist_ok=True)
@@ -200,16 +186,9 @@ def main(config):
     else:
         directory = config.evaldir
     eval_eps = tools.load_episodes(directory, limit=1)
-    make = lambda mode, id: make_env(config, mode, id)
-    train_envs = [make("train", i) for i in range(config.envs)]
-    eval_envs = [make("eval", i) for i in range(config.envs)]
-    if config.parallel:
-        train_envs = [Parallel(env, "process") for env in train_envs]
-        eval_envs = [Parallel(env, "process") for env in eval_envs]
-    else:
-        train_envs = [Damy(env) for env in train_envs]
-        eval_envs = [Damy(env) for env in eval_envs]
-    acts = train_envs[0].action_space
+    envs = [make_env(cfg)]
+
+    acts = envs[0].action_space
     print("Action Space", acts)
     config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
 
@@ -237,7 +216,7 @@ def main(config):
 
         state = tools.simulate(
             random_agent,
-            train_envs,
+            envs,
             train_eps,
             config.traindir,
             logger,
@@ -251,8 +230,8 @@ def main(config):
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
     agent = Dreamer(
-        train_envs[0].observation_space,
-        train_envs[0].action_space,
+        envs[0].observation_space,
+        envs[0].action_space,
         config,
         logger,
         train_dataset,
@@ -272,7 +251,7 @@ def main(config):
             eval_policy = functools.partial(agent, training=False)
             tools.simulate(
                 eval_policy,
-                eval_envs,
+                envs,
                 eval_eps,
                 config.evaldir,
                 logger,
@@ -285,7 +264,7 @@ def main(config):
         print("Start training.")
         state = tools.simulate(
             agent,
-            train_envs,
+            envs,
             train_eps,
             config.traindir,
             logger,
@@ -298,36 +277,31 @@ def main(config):
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
         }
         torch.save(items_to_save, logdir / "latest.pt")
-    for env in train_envs + eval_envs:
-        try:
-            env.close()
-        except Exception:
-            pass
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--configs", nargs="+")
-    args, remaining = parser.parse_known_args()
-    configs = yaml.safe_load(
-        (pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text()
-    )
-
-
-    def recursive_update(base, update):
-        for key, value in update.items():
-            if isinstance(value, dict) and key in base:
-                recursive_update(base[key], value)
-            else:
-                base[key] = value
-
-
-    name_list = ["defaults", *args.configs] if args.configs else ["defaults"]
-    defaults = {}
-    for name in name_list:
-        recursive_update(defaults, configs[name])
-    parser = argparse.ArgumentParser()
-    for key, value in sorted(defaults.items(), key=lambda x: x[0]):
-        arg_type = tools.args_type(value)
-        parser.add_argument(f"--{key}", type=arg_type, default=arg_type(value))
-    main(parser.parse_args(remaining))
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("--configs", nargs="+")
+    # args, remaining = parser.parse_known_args()
+    # configs = yaml.safe_load(
+    #     (pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text()
+    # )
+    #
+    #
+    # def recursive_update(base, update):
+    #     for key, value in update.items():
+    #         if isinstance(value, dict) and key in base:
+    #             recursive_update(base[key], value)
+    #         else:
+    #             base[key] = value
+    #
+    #
+    # name_list = ["defaults", *args.configs] if args.configs else ["defaults"]
+    # defaults = {}
+    # for name in name_list:
+    #     recursive_update(defaults, configs[name])
+    # parser = argparse.ArgumentParser()
+    # for key, value in sorted(defaults.items(), key=lambda x: x[0]):
+    #     arg_type = tools.args_type(value)
+    #     parser.add_argument(f"--{key}", type=arg_type, default=arg_type(value))
+    main()
