@@ -1,0 +1,161 @@
+name: limx_humanoid
+headless: ${..headless}
+num_envs: ${..num_envs}
+num_sim_actions: 18
+env_spacing: 5.0
+
+terrain:
+  mesh_type: 'plane'  # "heightfield" # none, plane, heightfield or trimesh
+  horizontal_scale: 0.1  # [m]
+  vertical_scale: 0.005  # [m]
+  border_size: 25  # [m]
+  curriculum: True
+  static_friction: 1.0
+  dynamic_friction: 1.0
+  restitution: 0.
+  selected: False  # select a unique terrain type and pass all arguments
+  terrain_kwargs: None  # Dict of arguments for selected terrain
+  max_init_terrain_level: 5  # starting curriculum state
+  terrain_length: 8.
+  terrain_width: 8.
+  num_rows: 10  # number of terrain rows (levels)
+  num_cols: 20  # number of terrain cols (types)
+  # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
+  terrain_proportions: [ 0.1, 0.1, 0.35, 0.25, 0.2 ]
+  # trimesh only:
+  slope_treshold: 0.75  # slopes above this threshold will be corrected to vertical surfaces
+
+init_state:
+  pos: [ 0.0, 0.0, 0.82 ]
+  quat: [ 0.0, 0.0, 0.0, 1.0 ]  # x,y,z,w [quat]
+  lin_vel: [ 0.0, 0.0, 0.0 ]  # x,y,z [m/s
+  ang_vel: [ 0.0, 0.0, 0.0 ]  # x,y,z [rad/s]
+  default_joint_angles: {
+    'shoulder_pitch_joint_L': 0.0,
+    'shoulder_roll_joint_L': 0.0,
+    'shoulder_yaw_joint_L': 0.0,
+    'elbow_joint_L': 0.0,
+    'hip_roll_joint_L': 0.0,
+    'hip_yaw_joint_L': 0.0,
+    'hip_pitch_joint_L': 0.0,
+    'knee_joint_L': 0.0,
+    'ankle_joint_L': 0.0,
+    'shoulder_pitch_joint_R': 0.0,
+    'shoulder_roll_joint_R': 0.0,
+    'shoulder_yaw_joint_R': 0.0,
+    'elbow_joint_R': 0.0,
+    'hip_roll_joint_R': 0.0,
+    'hip_yaw_joint_R': 0.0,
+    'hip_pitch_joint_R': 0.0,
+    'knee_joint_R': 0.0,
+    'ankle_joint_R': 0.0,
+  }
+
+asset:
+  urdf: "resources/robots/limx2/urdf/humanoid.urdf"
+  foot_name: "ankle"
+  hand_name: "contact_hand"
+  knee_name: "knee"
+
+  default_dof_drive_mode: 3 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 3 effort)
+  collapse_fixed_joints: True
+  replace_cylinder_with_capsule: False
+  flip_visual_attachments: False
+  fix_base_link: False
+  density: 0.001
+  angular_damping: 0.
+  linear_damping: 0.
+  max_angular_velocity: 1000.
+  max_linear_velocity: 1000.
+  armature: 0.
+  thickness: 0.01
+  disable_gravity: False
+  self_collisions: 0  # 1 to disable, 0 to enable...bitwise filter
+
+sim:
+  dt: 0.001
+  substeps: 1
+  up_axis: 1 # 1 for z, 0 for y -> adapt gravity accordingly
+  use_gpu_pipeline: True
+  grav: -9.81
+  physx:
+    num_threads: 10
+    solver_type: 1  # 0: pgs, 1: tgs
+    use_gpu: True # set to False to run on CPU
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.005
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.1
+    max_depenetration_velocity: 1.0
+    default_buffer_size_multiplier: 5.0
+    max_gpu_contact_pairs: 8388608 # 8*1024*1024
+    num_subscenes: 4
+    contact_collection: 2 # 0: CC_NEVER (don't collect contact info), 1: CC_LAST_SUBSTEP (collect only contacts on last substep), 2: CC_ALL_SUBSTEPS (broken - do not use!)
+
+viewer:
+  pos: [ 15., 15, 3. ]  # [m]
+  lookat: [ 0, 0, 0 ]  # [m]
+
+domain_rand:
+  randomize_friction: True
+  friction_range: [ 0.35, 0.95 ]
+  randomize_restitution: True
+  restitution_range: [ 0.0, 0.75 ]
+  randomize_base_mass: True
+  added_mass_range: [ -2, 2 ]
+  randomize_base_com: True
+  rand_com_vec: [ 0.02, 0.02, 0.04 ]
+  randomize_inertia: True
+  randomize_inertia_range: [ 0.8, 1.2 ]
+  randomize_Kp: True
+  randomize_Kp_range: [ 0.98, 1.02 ]
+  randomize_Kd: True
+  randomize_Kd_range: [ 0.98, 1.02 ]
+  randomize_motor_torque: True
+  randomize_motor_torque_range: [ 0.9, 1.1 ]
+  randomize_default_dof_pos: True
+  randomize_default_dof_pos_range: [ -0.05, 0.05 ]
+  randomize_motor_response_delay: True
+  randomize_motor_response_delay_range: [0.0, 0.015]
+
+  randomize_hand_mass: False
+  added_hand_mass_range: [ 0, 3 ]
+  randomize_hand_com: False
+  rand_hand_com_vec: [ 0.05, 0.05, 0.05 ]
+
+
+control:
+  # PD Drive parameters:
+  control_type: 'P'
+
+  stiffness: { 'shoulder_pitch': 100,
+               'shoulder_roll': 100,
+               'shoulder_yaw': 100,
+               'elbow': 100,
+               'hip_roll': 50.0,
+               'hip_yaw': 50.0,
+               'hip_pitch': 100.0,
+               'knee': 200.0,
+               'ankle': 50.0 }
+  damping: { 'shoulder_pitch': 2.5,
+             'shoulder_roll': 2.5,
+             'shoulder_yaw': 2.5,
+             'elbow': 2.5,
+             'hip_roll': 1.25,
+             'hip_yaw': 1.25,
+             'hip_pitch': 2.5,
+             'knee': 10.0,
+             'ankle': 1.25 }
+  # action scale: target angle: actionScale * action + defaultAngle
+  action_scale: { 'shoulder_pitch': 0.5,
+                  'shoulder_roll': 0.5,
+                  'shoulder_yaw': 0.5,
+                  'elbow': 0.5,
+                  'hip_roll': 1.0,
+                  'hip_yaw': 1.0,
+                  'hip_pitch': 0.5,
+                  'knee': 0.25,
+                  'ankle': 0.25 }
+  # decimation: Number of control action updates @ sim DT per policy DT
+  decimation: 10  # 100hz

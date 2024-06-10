@@ -1,0 +1,19 @@
+name: "humanoid_locomotion"
+headless: False
+test: False
+export_policy: True
+num_envs: 4096
+env_dt: 0.01
+# set default task and default training config based on task
+defaults:
+  - task: loco
+  - sim: sim
+  - env: limx
+  - override hydra/job_logging: disabled
+  - _self_
+
+# set the directory where the output files get saved
+hydra:
+  output_subdir: null
+  run:
+    dir: .

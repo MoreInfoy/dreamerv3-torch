@@ -4,7 +4,7 @@ import os
 import pathlib
 import sys
 
-os.environ["MUJOCO_GL"] = "osmesa"
+# os.environ["MUJOCO_GL"] = "osmesa"
 
 import numpy as np
 import ruamel.yaml as yaml
@@ -20,7 +20,6 @@ from parallel import Parallel, Damy
 import torch
 from torch import nn
 from torch import distributions as torchd
-
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -41,10 +40,10 @@ class Dreamer(nn.Module):
         self._step = logger.step // config.action_repeat
         self._update_count = 0
         self._dataset = dataset
-        self._wm = models.WorldModel(obs_space, act_space, self._step, config)
+        self._wm: models.WorldModel = models.WorldModel(obs_space, act_space, self._step, config)
         self._task_behavior = models.ImagBehavior(config, self._wm)
         if (
-            config.compile and os.name != "nt"
+                config.compile and os.name != "nt"
         ):  # compilation is not supported on windows
             self._wm = torch.compile(self._wm)
             self._task_behavior = torch.compile(self._task_behavior)
@@ -147,52 +146,19 @@ def make_env(config, mode, id):
     suite, task = config.task.split("_", 1)
     if suite == "dmc":
         import envs.dmc as dmc
+        env = dmc.DeepMindControl(
+            task, config.action_repeat, config.size, seed=config.seed + id
+        )
+        env = wrappers.NormalizeActions(env)
+    if suite == "isaac":
+        from envs.prometheus.core.env.humanoid import HumanoidTaskEnv
+        from envs.prometheus.core.sim.isaacsim import IsaacSim
+        from envs.prometheus.core.task.locomotion import Locomotion
 
         env = dmc.DeepMindControl(
             task, config.action_repeat, config.size, seed=config.seed + id
         )
         env = wrappers.NormalizeActions(env)
-    elif suite == "atari":
-        import envs.atari as atari
-
-        env = atari.Atari(
-            task,
-            config.action_repeat,
-            config.size,
-            gray=config.grayscale,
-            noops=config.noops,
-            lives=config.lives,
-            sticky=config.stickey,
-            actions=config.actions,
-            resize=config.resize,
-            seed=config.seed + id,
-        )
-        env = wrappers.OneHotAction(env)
-    elif suite == "dmlab":
-        import envs.dmlab as dmlab
-
-        env = dmlab.DeepMindLabyrinth(
-            task,
-            mode if "train" in mode else "test",
-            config.action_repeat,
-            seed=config.seed + id,
-        )
-        env = wrappers.OneHotAction(env)
-    elif suite == "memorymaze":
-        from envs.memorymaze import MemoryMaze
-
-        env = MemoryMaze(task, seed=config.seed + id)
-        env = wrappers.OneHotAction(env)
-    elif suite == "crafter":
-        import envs.crafter as crafter
-
-        env = crafter.Crafter(task, config.size, seed=config.seed + id)
-        env = wrappers.OneHotAction(env)
-    elif suite == "minecraft":
-        import envs.minecraft as minecraft
-
-        env = minecraft.make_env(task, size=config.size, break_speed=config.break_speed)
-        env = wrappers.OneHotAction(env)
     else:
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit)
@@ -347,12 +313,14 @@ if __name__ == "__main__":
         (pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text()
     )
 
+
     def recursive_update(base, update):
         for key, value in update.items():
             if isinstance(value, dict) and key in base:
                 recursive_update(base[key], value)
             else:
                 base[key] = value
+
 
     name_list = ["defaults", *args.configs] if args.configs else ["defaults"]
     defaults = {}

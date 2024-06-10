@@ -194,8 +194,8 @@ class WorldModel(nn.Module):
             embed[:6, :5], data["action"][:6, :5], data["is_first"][:6, :5]
         )
         recon = self.heads["decoder"](self.dynamics.get_feat(states))["image"].mode()[
-            :6
-        ]
+                :6
+                ]
         reward_post = self.heads["reward"](self.dynamics.get_feat(states)).mode()[:6]
         init = {k: v[:, -1] for k, v in states.items()}
         prior = self.dynamics.imagine_with_action(data["action"][:6, 5:], init)
@@ -281,9 +281,9 @@ class ImagBehavior(nn.Module):
             self.reward_ema = RewardEMA(device=self._config.device)
 
     def _train(
-        self,
-        start,
-        objective,
+            self,
+            start,
+            objective,
     ):
         self._update_slow_target()
         metrics = {}
@@ -382,12 +382,12 @@ class ImagBehavior(nn.Module):
         return target, weights, value[:-1]
 
     def _compute_actor_loss(
-        self,
-        imag_feat,
-        imag_action,
-        target,
-        weights,
-        base,
+            self,
+            imag_feat,
+            imag_action,
+            target,
+            weights,
+            base,
     ):
         metrics = {}
         inp = imag_feat.detach()
@@ -407,13 +407,13 @@ class ImagBehavior(nn.Module):
             actor_target = adv
         elif self._config.imag_gradient == "reinforce":
             actor_target = (
-                policy.log_prob(imag_action)[:-1][:, :, None]
-                * (target - self.value(imag_feat[:-1]).mode()).detach()
+                    policy.log_prob(imag_action)[:-1][:, :, None]
+                    * (target - self.value(imag_feat[:-1]).mode()).detach()
             )
         elif self._config.imag_gradient == "both":
             actor_target = (
-                policy.log_prob(imag_action)[:-1][:, :, None]
-                * (target - self.value(imag_feat[:-1]).mode()).detach()
+                    policy.log_prob(imag_action)[:-1][:, :, None]
+                    * (target - self.value(imag_feat[:-1]).mode()).detach()
             )
             mix = self._config.imag_gradient_mix
             actor_target = mix * target + (1 - mix) * actor_target
@@ -427,6 +427,6 @@ class ImagBehavior(nn.Module):
         if self._config.critic["slow_target"]:
             if self._updates % self._config.critic["slow_target_update"] == 0:
                 mix = self._config.critic["slow_target_fraction"]
-                for s, d in zip(self.value.parameters(), self._slow_value.parameters()):
+                for s, d in zip(self.value.parameters(), self._slow_value.parameters()):  # todo: wrong order?
                     d.data = mix * s.data + (1 - mix) * d.data
             self._updates += 1
