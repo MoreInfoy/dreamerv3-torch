@@ -173,7 +173,9 @@ class WorldModel(nn.Module):
     # this function is called during both rollout and training
     def preprocess(self, obs):
         obs = obs.copy()
-        obs["image"] = torch.Tensor(obs["image"]) / 255.0
+        obs_img = obs.get("image", None)
+        if obs_img is not None:
+            obs["image"] = torch.Tensor(obs["image"]) / 255.0
         if "discount" in obs:
             obs["discount"] *= self._config.discount
             # (batch_size, batch_length) -> (batch_size, batch_length, 1)
@@ -182,7 +184,7 @@ class WorldModel(nn.Module):
         assert "is_first" in obs
         # 'is_terminal' is necesarry to train cont_head
         assert "is_terminal" in obs
-        obs["cont"] = torch.Tensor(1.0 - obs["is_terminal"]).unsqueeze(-1)
+        obs["cont"] = torch.Tensor(1.0 - obs["is_terminal"].float()).unsqueeze(-1)
         obs = {k: torch.Tensor(v).to(self._config.device) for k, v in obs.items()}
         return obs
 

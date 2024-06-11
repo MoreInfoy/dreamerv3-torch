@@ -137,7 +137,7 @@ class RSSM(nn.Module):
             (state, state),
         )
 
-        # (batch, time, stoch, discrete_num) -> (batch, time, stoch, discrete_num)
+        # (time, batch, stoch, discrete_num) -> (batch, time, stoch, discrete_num)
         post = {k: swap(v) for k, v in post.items()}
         prior = {k: swap(v) for k, v in prior.items()}
         return post, prior
@@ -181,7 +181,7 @@ class RSSM(nn.Module):
         # overwrite the prev_state only where is_first=True
         elif torch.sum(is_first) > 0:
             is_first = is_first[:, None]
-            prev_action *= 1.0 - is_first
+            prev_action *= (1.0 - is_first.float())
             init_state = self.initial(len(is_first))
             for key, val in prev_state.items():
                 is_first_r = torch.reshape(
@@ -189,7 +189,7 @@ class RSSM(nn.Module):
                     is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
                 )
                 prev_state[key] = (
-                    val * (1.0 - is_first_r) + init_state[key] * is_first_r
+                    val * (1.0 - is_first_r.float()) + init_state[key] * is_first_r.float()
                 )
 
         prior = self.img_step(prev_state, prev_action)

@@ -149,8 +149,6 @@ def make_dataset(episodes, config):
 def make_env(config):
     sim = IsaacSim(config.sim)
     env = HumanoidTaskEnv(sim, Locomotion(sim, config.task), config.env)
-    env = wrappers.SelectAction(env, key="action")
-    env = wrappers.UUID(env)
     return env
 
 
@@ -186,9 +184,9 @@ def main(cfg: DictConfig) -> None:
     else:
         directory = config.evaldir
     eval_eps = tools.load_episodes(directory, limit=1)
-    envs = [make_env(cfg)]
+    env = make_env(cfg)
 
-    acts = envs[0].action_space
+    acts = env.action_space
     print("Action Space", acts)
     config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
 
@@ -198,13 +196,13 @@ def main(cfg: DictConfig) -> None:
         print(f"Prefill dataset ({prefill} steps).")
         if hasattr(acts, "discrete"):
             random_actor = tools.OneHotDist(
-                torch.zeros(config.num_actions).repeat(config.envs, 1)
+                torch.zeros(config.num_actions).repeat(env.num_envs, 1).to(device=env.device)
             )
         else:
             random_actor = torchd.independent.Independent(
                 torchd.uniform.Uniform(
-                    torch.Tensor(acts.low).repeat(config.envs, 1),
-                    torch.Tensor(acts.high).repeat(config.envs, 1),
+                    torch.Tensor(acts.low).repeat(env.num_envs, 1).to(device=env.device),
+                    torch.Tensor(acts.high).repeat(env.num_envs, 1).to(device=env.device),
                 ),
                 1,
             )
@@ -216,7 +214,7 @@ def main(cfg: DictConfig) -> None:
 
         state = tools.simulate(
             random_agent,
-            envs,
+            env,
             train_eps,
             config.traindir,
             logger,
@@ -230,8 +228,8 @@ def main(cfg: DictConfig) -> None:
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
     agent = Dreamer(
-        envs[0].observation_space,
-        envs[0].action_space,
+        env.observation_space,
+        env.action_space,
         config,
         logger,
         train_dataset,
@@ -251,7 +249,7 @@ def main(cfg: DictConfig) -> None:
             eval_policy = functools.partial(agent, training=False)
             tools.simulate(
                 eval_policy,
-                envs,
+                env,
                 eval_eps,
                 config.evaldir,
                 logger,
@@ -264,7 +262,7 @@ def main(cfg: DictConfig) -> None:
         print("Start training.")
         state = tools.simulate(
             agent,
-            envs,
+            env,
             train_eps,
             config.traindir,
             logger,

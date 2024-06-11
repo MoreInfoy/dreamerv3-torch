@@ -11,11 +11,12 @@ import random
 import numpy as np
 
 import torch
+from etils.etree import unzip
 from torch import nn
 from torch.nn import functional as F
 from torch import distributions as torchd
 from torch.utils.tensorboard import SummaryWriter
-
+from envs.prometheus.core.env.env_base import EnvBase
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -80,7 +81,7 @@ class Logger:
         scalars = list(self._scalars.items())
         if fps:
             scalars.append(("fps", self._compute_fps(step)))
-        print(f"[{step}]", " / ".join(f"{k} {v:.1f}" for k, v in scalars))
+        print(f"[{step}]", " / ".join(f"{k} {v:.3f}" for k, v in scalars))
         with (self._logdir / "metrics.jsonl").open("a") as f:
             f.write(json.dumps({"step": step, **dict(scalars)}) + "\n")
         for name, value in scalars:
@@ -126,94 +127,86 @@ class Logger:
 
 
 def simulate(
-    agent,
-    envs,
-    cache,
-    directory,
-    logger,
-    is_eval=False,
-    limit=None,
-    steps=0,
-    episodes=0,
-    state=None,
+        agent,
+        env,
+        cache,
+        directory,
+        logger,
+        is_eval=False,
+        limit=None,
+        steps=0,
+        episodes=0,
+        state=None,
 ):
+    env: EnvBase
     # initialize or unpack simulation state
     if state is None:
         step, episode = 0, 0
-        done = np.ones(len(envs), bool)
-        length = np.zeros(len(envs), np.int32)
-        obs = [None] * len(envs)
+        done = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        length = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        obs = [None] * env.num_envs
         agent_state = None
-        reward = [0] * len(envs)
+        reward = torch.zeros(env.num_envs, dtype=env.dtype, device=env.device)
     else:
         step, episode, done, length, obs, agent_state, reward = state
     while (steps and step < steps) or (episodes and episode < episodes):
         # reset envs if necessary
         if done.any():
-            indices = [index for index, d in enumerate(done) if d]
-            results = [envs[i].reset() for i in indices]
-            results = [r() for r in results]
-            for index, result in zip(indices, results):
-                t = result.copy()
-                t = {k: convert(v) for k, v in t.items()}
-                # action will be added to transition in add_to_cache
-                t["reward"] = 0.0
-                t["discount"] = 1.0
-                # initial state should be added to cache
-                add_to_cache(cache, envs[index].id, t)
-                # replace obs with done by initial state
-                obs[index] = result
+            results = env.reset()
+            t = results.copy()
+            # action will be added to transition in add_to_cache
+            t["reward"] = torch.zeros(env.num_envs, dtype=env.dtype, device=env.device)
+            t["discount"] = torch.ones(env.num_envs, dtype=env.dtype, device=env.device)
+            # initial state should be added to cache
+            add_to_cache(cache, env.id, t)
+            # replace obs with done by initial state
+            obs = results
+
         # step agents
-        obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
+        obs = {key: val for key, val in obs.items() if "log" not in key}
         action, agent_state = agent(obs, done, agent_state)
         if isinstance(action, dict):
-            action = [
-                {k: np.array(action[k][i].detach().cpu()) for k in action}
-                for i in range(len(envs))
-            ]
+            action = {k: action[k].detach() for k in action}
         else:
-            action = np.array(action)
-        assert len(action) == len(envs)
+            action = action.detach()
+
         # step envs
-        results = [e.step(a) for e, a in zip(envs, action)]
-        results = [r() for r in results]
-        obs, reward, done = zip(*[p[:3] for p in results])
-        obs = list(obs)
-        reward = list(reward)
-        done = np.stack(done)
+        obs, reward, done, info = env.step(action)
         episode += int(done.sum())
         length += 1
-        step += len(envs)
-        length *= 1 - done
+        step += env.num_envs
+        length *= (1 - done.long())
         # add to cache
-        for a, result, env in zip(action, results, envs):
-            o, r, d, info = result
-            o = {k: convert(v) for k, v in o.items()}
-            transition = o.copy()
-            if isinstance(a, dict):
-                transition.update(a)
-            else:
-                transition["action"] = a
-            transition["reward"] = r
-            transition["discount"] = info.get("discount", np.array(1 - float(d)))
-            add_to_cache(cache, env.id, transition)
+        obs = {key: val for key, val in obs.items() if "log" not in key}
+        transition = obs.copy()
+        if isinstance(action, dict):
+            transition.update(action)
+        else:
+            transition["action"] = action
+        transition["reward"] = reward
+        transition["discount"] = info.get("discount", 1.0 - done.float())
+        add_to_cache(cache, env.id, transition)
 
         if done.any():
             indices = [index for index, d in enumerate(done) if d]
             # logging for done episode
             for i in indices:
-                save_episodes(directory, {envs[i].id: cache[envs[i].id]})
-                length = len(cache[envs[i].id]["reward"]) - 1
-                score = float(np.array(cache[envs[i].id]["reward"]).sum())
-                video = cache[envs[i].id]["image"]
+                save_episodes(directory, {env.id: cache[env.id]})
+                length = len(cache[env.id]["reward"]) - 1
+                score = torch.mean(torch.sum(torch.stack(cache[env.id]["reward"], dim=0), dim=0)).item()
+                video = cache[env.id].get("images", None)
                 # record logs given from environments
-                for key in list(cache[envs[i].id].keys()):
-                    if "log_" in key:
-                        logger.scalar(
-                            key, float(np.array(cache[envs[i].id][key]).sum())
-                        )
-                        # log items won't be used later
-                        cache[envs[i].id].pop(key)
+                for key in list(info.keys()):
+                    if "log" in key:
+                        if isinstance(info[key], dict):
+                            for k, v in info[key].items():
+                                logger.scalar(
+                                    key + "_" + k, v
+                                )
+                        else:
+                            logger.scalar(
+                                key, info[key]
+                            )
 
                 if not is_eval:
                     step_in_dataset = erase_over_episodes(cache, limit)
@@ -232,12 +225,12 @@ def simulate(
                     eval_lengths.append(length)
 
                     score = sum(eval_scores) / len(eval_scores)
-                    length = sum(eval_lengths) / len(eval_lengths)
-                    logger.video(f"eval_policy", np.array(video)[None])
+                    length_eval = sum(eval_lengths) / len(eval_lengths)
+                    # logger.video(f"eval_policy", np.array(video)[None])
 
                     if len(eval_scores) >= episodes and not eval_done:
                         logger.scalar(f"eval_return", score)
-                        logger.scalar(f"eval_length", length)
+                        logger.scalar(f"eval_length", length_eval)
                         logger.scalar(f"eval_episodes", len(eval_scores))
                         logger.write(step=logger.step)
                         eval_done = True
@@ -253,23 +246,23 @@ def add_to_cache(cache, id, transition):
     if id not in cache:
         cache[id] = dict()
         for key, val in transition.items():
-            cache[id][key] = [convert(val)]
+            cache[id][key] = [val]
     else:
         for key, val in transition.items():
             if key not in cache[id]:
                 # fill missing data(action, etc.) at second time
-                cache[id][key] = [convert(0 * val)]
-                cache[id][key].append(convert(val))
+                cache[id][key] = [0. * val]
+                cache[id][key].append(val)
             else:
-                cache[id][key].append(convert(val))
+                cache[id][key].append(val)
 
 
 def erase_over_episodes(cache, dataset_size):
     step_in_dataset = 0
     for key, ep in reversed(sorted(cache.items(), key=lambda x: x[0])):
         if (
-            not dataset_size
-            or step_in_dataset + (len(ep["reward"]) - 1) <= dataset_size
+                not dataset_size
+                or step_in_dataset + (len(ep["reward"]) - 1) <= dataset_size
         ):
             step_in_dataset += len(ep["reward"]) - 1
         else:
@@ -297,12 +290,8 @@ def save_episodes(directory, episodes):
     directory.mkdir(parents=True, exist_ok=True)
     for filename, episode in episodes.items():
         length = len(episode["reward"])
-        filename = directory / f"{filename}-{length}.npz"
-        with io.BytesIO() as f1:
-            np.savez_compressed(f1, **episode)
-            f1.seek(0)
-            with filename.open("wb") as f2:
-                f2.write(f1.read())
+        filename = directory / f"{filename}-{length}.pt"
+        torch.save(episode, filename)
     return True
 
 
@@ -316,48 +305,52 @@ def from_generator(generator, batch_size):
             data[key] = []
             for i in range(batch_size):
                 data[key].append(batch[i][key])
-            data[key] = np.stack(data[key], 0)
+            data[key] = torch.cat(data[key], dim=0)
         yield data
 
 
 def sample_episodes(episodes, length, seed=0):
-    np_random = np.random.RandomState(seed)
+    torch.manual_seed(seed)
     while True:
         size = 0
         ret = None
-        p = np.array(
-            [len(next(iter(episode.values()))) for episode in episodes.values()]
+        p = torch.tensor(
+            [len(next(iter(episode.values()))) for episode in episodes.values()],
+            dtype=torch.float32
         )
-        p = p / np.sum(p)
+        p = p / torch.sum(p)
         while size < length:
-            episode = np_random.choice(list(episodes.values()), p=p)
+            episode = list(episodes.values())[torch.multinomial(p, 1).item()]
             total = len(next(iter(episode.values())))
             # make sure at least one transition included
             if total < 2:
                 continue
-            if not ret:
-                index = int(np_random.randint(0, total - 1))
+            if ret is None:
+                index = int(torch.randint(0, total - 1, (1,)).item())
                 ret = {
-                    k: v[index : min(index + length, total)].copy()
+                    k: torch.cat([v[i].unsqueeze(1) for i in range(index, min(index + length, total))], dim=1)
                     for k, v in episode.items()
-                    if "log_" not in k
+                    if "log" not in k
                 }
                 if "is_first" in ret:
                     ret["is_first"][0] = True
             else:
-                # 'is_first' comes after 'is_last'
                 index = 0
                 possible = length - size
                 ret = {
-                    k: np.append(
-                        ret[k], v[index : min(index + possible, total)].copy(), axis=0
+                    k: torch.cat(
+                        [ret[k]] + [v[i].unsqueeze(1) for i in range(index, min(index + possible, total))], dim=1
                     )
                     for k, v in episode.items()
-                    if "log_" not in k
+                    if "log" not in k
                 }
+                # ret = {}
+                # for k, v in episode.items():
+                #     if "log" not in k:
+                #         ret[k] = torch.cat([v[i].unsqueeze(1) for i in range(index, min(index + possible, total))], dim=1)
                 if "is_first" in ret:
-                    ret["is_first"][size] = True
-            size = len(next(iter(ret.values())))
+                    ret["is_first"][:, size] = True
+            size = next(iter(ret.values())).shape[1]
         yield ret
 
 
@@ -423,7 +416,7 @@ class SampleDist:
 
 
 class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
-    def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
+    def __init__(self, logits=None, probs=None, unimix_ratio=0.0, device='cuda'):
         if logits is not None and unimix_ratio > 0.0:
             probs = F.softmax(logits, dim=-1)
             probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
@@ -451,13 +444,13 @@ class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
 
 class DiscDist:
     def __init__(
-        self,
-        logits,
-        low=-20.0,
-        high=20.0,
-        transfwd=symlog,
-        transbwd=symexp,
-        device="cuda",
+            self,
+            logits,
+            low=-20.0,
+            high=20.0,
+            transfwd=symlog,
+            transbwd=symexp,
+            device="cuda",
     ):
         self.logits = logits
         self.probs = torch.softmax(logits, -1)
@@ -493,8 +486,8 @@ class DiscDist:
         weight_below = dist_to_above / total
         weight_above = dist_to_below / total
         target = (
-            F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
-            + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
+                F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
+                + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
         )
         log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
         target = target.squeeze(-2)
@@ -624,8 +617,8 @@ class UnnormalizedHuber(torchd.normal.Normal):
 
     def log_prob(self, event):
         return -(
-            torch.sqrt((event - self.mean) ** 2 + self._threshold**2)
-            - self._threshold
+                torch.sqrt((event - self.mean) ** 2 + self._threshold ** 2)
+                - self._threshold
         )
 
     def mode(self):
@@ -697,7 +690,7 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_, axis):
     if isinstance(pcont, (int, float)):
         pcont = pcont * torch.ones_like(reward)
     dims = list(range(len(reward.shape)))
-    dims = [axis] + dims[1:axis] + [0] + dims[axis + 1 :]
+    dims = [axis] + dims[1:axis] + [0] + dims[axis + 1:]
     if axis != 0:
         reward = reward.permute(dims)
         value = value.permute(dims)
@@ -720,16 +713,16 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_, axis):
 
 class Optimizer:
     def __init__(
-        self,
-        name,
-        parameters,
-        lr,
-        eps=1e-4,
-        clip=None,
-        wd=None,
-        wd_pattern=r".*",
-        opt="adam",
-        use_amp=False,
+            self,
+            name,
+            parameters,
+            lr,
+            eps=1e-4,
+            clip=None,
+            wd=None,
+            wd_pattern=r".*",
+            opt="adam",
+            use_amp=False,
     ):
         assert 0 <= wd < 1
         assert not clip or 1 <= clip
@@ -963,7 +956,7 @@ def enable_deterministic_run():
 
 
 def recursively_collect_optim_state_dict(
-    obj, path="", optimizers_state_dicts=None, visited=None
+        obj, path="", optimizers_state_dicts=None, visited=None
 ):
     if optimizers_state_dicts is None:
         optimizers_state_dicts = {}
