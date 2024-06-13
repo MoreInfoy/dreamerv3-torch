@@ -28,7 +28,7 @@ reward_EMA: True
 num_actions: 18
 
 # Model
-dyn_hidden: 128
+dyn_hidden: 1024
 dyn_deter: 128
 dyn_stoch: 32
 dyn_discrete: 32
@@ -41,9 +41,9 @@ units: 512
 act: 'SiLU'
 norm: True
 encoder:
-  { mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 5, mlp_units: 512, symlog_inputs: True }
+  { mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 3, mlp_units: 128, symlog_inputs: True }
 decoder:
-  { mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 5, mlp_units: 512, cnn_sigmoid: False, image_dist: mse, vector_dist: symlog_mse, outscale: 1.0 }
+  { mlp_keys: '.*', cnn_keys: '$^', act: 'SiLU', norm: True, cnn_depth: 32, kernel_size: 4, minres: 4, mlp_layers: 3, mlp_units: 256, cnn_sigmoid: False, image_dist: mse, vector_dist: symlog_mse, outscale: 1.0 }
 actor:
   { layers: 2, dist: 'normal', entropy: 3e-4, unimix_ratio: 0.01, std: 'learned', min_std: 0.1, max_std: 1.0, temp: 0.1, lr: 3e-5, eps: 1e-5, grad_clip: 100.0, outscale: 1.0 }
 critic:

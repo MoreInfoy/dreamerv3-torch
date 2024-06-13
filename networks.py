@@ -12,22 +12,22 @@ import tools
 
 class RSSM(nn.Module):
     def __init__(
-        self,
-        stoch=30,
-        deter=200,
-        hidden=200,
-        rec_depth=1,
-        discrete=False,
-        act="SiLU",
-        norm=True,
-        mean_act="none",
-        std_act="softplus",
-        min_std=0.1,
-        unimix_ratio=0.01,
-        initial="learned",
-        num_actions=None,
-        embed=None,
-        device=None,
+            self,
+            stoch=30,
+            deter=200,
+            hidden=200,
+            rec_depth=1,
+            discrete=False,
+            act="SiLU",
+            norm=True,
+            mean_act="none",
+            std_act="softplus",
+            min_std=0.1,
+            unimix_ratio=0.01,
+            initial="learned",
+            num_actions=None,
+            embed=None,
+            device=None,
     ):
         super(RSSM, self).__init__()
         self._stoch = stoch
@@ -78,9 +78,7 @@ class RSSM(nn.Module):
         self._obs_out_layers.apply(tools.weight_init)
 
         if self._discrete:
-            self._imgs_stat_layer = nn.Linear(
-                self._hidden, self._stoch * self._discrete
-            )
+            self._imgs_stat_layer = nn.Linear(self._hidden, self._stoch * self._discrete)
             self._imgs_stat_layer.apply(tools.uniform_weight_init(1.0))
             self._obs_stat_layer = nn.Linear(self._hidden, self._stoch * self._discrete)
             self._obs_stat_layer.apply(tools.uniform_weight_init(1.0))
@@ -189,15 +187,15 @@ class RSSM(nn.Module):
                     is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
                 )
                 prev_state[key] = (
-                    val * (1.0 - is_first_r.float()) + init_state[key] * is_first_r.float()
+                        val * (1.0 - is_first_r.float()) + init_state[key] * is_first_r.float()
                 )
 
         prior = self.img_step(prev_state, prev_action)
         x = torch.cat([prior["deter"], embed], -1)
         # (batch_size, prior_deter + embed) -> (batch_size, hidden)
-        x = self._obs_out_layers(x)
+        hidden_state = self._obs_out_layers(x)
         # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
-        stats = self._suff_stats_layer("obs", x)
+        stats = self._suff_stats_layer("obs", hidden_state)
         if sample:
             stoch = self.get_dist(stats).sample()
         else:
@@ -214,17 +212,15 @@ class RSSM(nn.Module):
             prev_stoch = prev_stoch.reshape(shape)
         # (batch, stoch * discrete_num) -> (batch, stoch * discrete_num + action)
         x = torch.cat([prev_stoch, prev_action], -1)
-        # (batch, stoch * discrete_num + action, embed) -> (batch, hidden)
-        x = self._img_in_layers(x)
-        for _ in range(self._rec_depth):  # rec depth is not correctly implemented
-            deter = prev_state["deter"]
-            # (batch, hidden), (batch, deter) -> (batch, deter), (batch, deter)
-            x, deter = self._cell(x, [deter])
-            deter = deter[0]  # Keras wraps the state in a list.
+        # (batch, stoch * discrete_num + action) -> (batch, hidden)
+        hidden_state = self._img_in_layers(x)
+        deter = prev_state["deter"]
+        # (batch, hidden), (batch, deter) -> (batch, deter)
+        deter = self._cell(hidden_state, deter)
         # (batch, deter) -> (batch, hidden)
-        x = self._img_out_layers(x)
+        hidden_state = self._img_out_layers(deter)
         # (batch, hidden) -> (batch_size, stoch, discrete_num)
-        stats = self._suff_stats_layer("ims", x)
+        stats = self._suff_stats_layer("ims", hidden_state)
         if sample:
             stoch = self.get_dist(stats).sample()
         else:
@@ -292,18 +288,18 @@ class RSSM(nn.Module):
 
 class MultiEncoder(nn.Module):
     def __init__(
-        self,
-        shapes,
-        mlp_keys,
-        cnn_keys,
-        act,
-        norm,
-        cnn_depth,
-        kernel_size,
-        minres,
-        mlp_layers,
-        mlp_units,
-        symlog_inputs,
+            self,
+            shapes,
+            mlp_keys,
+            cnn_keys,
+            act,
+            norm,
+            cnn_depth,
+            kernel_size,
+            minres,
+            mlp_layers,
+            mlp_units,
+            symlog_inputs,
     ):
         super(MultiEncoder, self).__init__()
         excluded = ("is_first", "is_last", "is_terminal", "reward")
@@ -359,22 +355,22 @@ class MultiEncoder(nn.Module):
 
 class MultiDecoder(nn.Module):
     def __init__(
-        self,
-        feat_size,
-        shapes,
-        mlp_keys,
-        cnn_keys,
-        act,
-        norm,
-        cnn_depth,
-        kernel_size,
-        minres,
-        mlp_layers,
-        mlp_units,
-        cnn_sigmoid,
-        image_dist,
-        vector_dist,
-        outscale,
+            self,
+            feat_size,
+            shapes,
+            mlp_keys,
+            cnn_keys,
+            act,
+            norm,
+            cnn_depth,
+            kernel_size,
+            minres,
+            mlp_layers,
+            mlp_units,
+            cnn_sigmoid,
+            image_dist,
+            vector_dist,
+            outscale,
     ):
         super(MultiDecoder, self).__init__()
         excluded = ("is_first", "is_last", "is_terminal")
@@ -447,13 +443,13 @@ class MultiDecoder(nn.Module):
 
 class ConvEncoder(nn.Module):
     def __init__(
-        self,
-        input_shape,
-        depth=32,
-        act="SiLU",
-        norm=True,
-        kernel_size=4,
-        minres=4,
+            self,
+            input_shape,
+            depth=32,
+            act="SiLU",
+            norm=True,
+            kernel_size=4,
+            minres=4,
     ):
         super(ConvEncoder, self).__init__()
         act = getattr(torch.nn, act)
@@ -498,16 +494,16 @@ class ConvEncoder(nn.Module):
 
 class ConvDecoder(nn.Module):
     def __init__(
-        self,
-        feat_size,
-        shape=(3, 64, 64),
-        depth=32,
-        act=nn.ELU,
-        norm=True,
-        kernel_size=4,
-        minres=4,
-        outscale=1.0,
-        cnn_sigmoid=False,
+            self,
+            feat_size,
+            shape=(3, 64, 64),
+            depth=32,
+            act=nn.ELU,
+            norm=True,
+            kernel_size=4,
+            minres=4,
+            outscale=1.0,
+            cnn_sigmoid=False,
     ):
         super(ConvDecoder, self).__init__()
         act = getattr(torch.nn, act)
@@ -515,12 +511,12 @@ class ConvDecoder(nn.Module):
         self._cnn_sigmoid = cnn_sigmoid
         layer_num = int(np.log2(shape[1]) - np.log2(minres))
         self._minres = minres
-        out_ch = minres**2 * depth * 2 ** (layer_num - 1)
+        out_ch = minres ** 2 * depth * 2 ** (layer_num - 1)
         self._embed_size = out_ch
 
         self._linear_layer = nn.Linear(feat_size, out_ch)
         self._linear_layer.apply(tools.uniform_weight_init(outscale))
-        in_dim = out_ch // (minres**2)
+        in_dim = out_ch // (minres ** 2)
         out_dim = in_dim // 2
 
         layers = []
@@ -569,7 +565,7 @@ class ConvDecoder(nn.Module):
         x = self._linear_layer(features)
         # (batch, time, -1) -> (batch * time, h, w, ch)
         x = x.reshape(
-            [-1, self._minres, self._minres, self._embed_size // self._minres**2]
+            [-1, self._minres, self._minres, self._embed_size // self._minres ** 2]
         )
         # (batch, time, -1) -> (batch * time, ch, h, w)
         x = x.permute(0, 3, 1, 2)
@@ -587,24 +583,24 @@ class ConvDecoder(nn.Module):
 
 class MLP(nn.Module):
     def __init__(
-        self,
-        inp_dim,
-        shape,
-        layers,
-        units,
-        act="SiLU",
-        norm=True,
-        dist="normal",
-        std=1.0,
-        min_std=0.1,
-        max_std=1.0,
-        absmax=None,
-        temp=0.1,
-        unimix_ratio=0.01,
-        outscale=1.0,
-        symlog_inputs=False,
-        device="cuda",
-        name="NoName",
+            self,
+            inp_dim,
+            shape,
+            layers,
+            units,
+            act="SiLU",
+            norm=True,
+            dist="normal",
+            std=1.0,
+            min_std=0.1,
+            max_std=1.0,
+            absmax=None,
+            temp=0.1,
+            unimix_ratio=0.01,
+            outscale=1.0,
+            symlog_inputs=False,
+            device="cuda",
+            name="NoName",
     ):
         super(MLP, self).__init__()
         self._shape = (shape,) if isinstance(shape, int) else shape
@@ -758,14 +754,13 @@ class GRUCell(nn.Module):
         return self._size
 
     def forward(self, inputs, state):
-        state = state[0]  # Keras wraps the state in a list.
         parts = self.layers(torch.cat([inputs, state], -1))
         reset, cand, update = torch.split(parts, [self._size] * 3, -1)
         reset = torch.sigmoid(reset)
         cand = self._act(reset * cand)
         update = torch.sigmoid(update + self._update_bias)
         output = update * cand + (1 - update) * state
-        return output, [output]
+        return output
 
 
 class Conv2dSamePad(torch.nn.Conv2d):

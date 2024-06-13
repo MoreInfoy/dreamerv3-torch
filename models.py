@@ -27,9 +27,11 @@ class RewardEMA:
 
 
 class WorldModel(nn.Module):
-    def __init__(self, obs_space, act_space, step, config):
+    encoder: networks.MultiEncoder
+    dynamics: networks.RSSM
+
+    def __init__(self, obs_space, config):
         super(WorldModel, self).__init__()
-        self._step = step
         self._use_amp = True if config.precision == 16 else False
         self._config = config
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
@@ -105,7 +107,7 @@ class WorldModel(nn.Module):
             cont=config.cont_head["loss_scale"],
         )
 
-    def _train(self, data):
+    def train_model(self, data):
         # action (batch_size, batch_length, act_dim)
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
@@ -282,7 +284,7 @@ class ImagBehavior(nn.Module):
             self.register_buffer("ema_vals", torch.zeros((2,)).to(self._config.device))
             self.reward_ema = RewardEMA(device=self._config.device)
 
-    def _train(
+    def train_model(
             self,
             start,
             objective,

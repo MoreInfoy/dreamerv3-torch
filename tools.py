@@ -56,7 +56,7 @@ class TimeRecording:
 
 
 class Logger:
-    def __init__(self, logdir, step):
+    def __init__(self, logdir):
         self._logdir = logdir
         self._writer = SummaryWriter(log_dir=str(logdir), max_queue=1000)
         self._last_step = None
@@ -64,7 +64,6 @@ class Logger:
         self._scalars = {}
         self._images = {}
         self._videos = {}
-        self.step = step
 
     def scalar(self, name, value):
         self._scalars[name] = float(value)
@@ -75,107 +74,71 @@ class Logger:
     def video(self, name, value):
         self._videos[name] = np.array(value)
 
-    def write(self, fps=False, step=False):
-        if not step:
-            step = self.step
+    def write(self, iters=0):
         scalars = list(self._scalars.items())
-        if fps:
-            scalars.append(("fps", self._compute_fps(step)))
-        print(f"[{step}]", " / ".join(f"{k} {v:.3f}" for k, v in scalars))
+        print(f"[{iters}]", " / ".join(f"{k} {v:.3f}" for k, v in scalars))
         with (self._logdir / "metrics.jsonl").open("a") as f:
-            f.write(json.dumps({"step": step, **dict(scalars)}) + "\n")
+            f.write(json.dumps({"iters": iters, **dict(scalars)}) + "\n")
         for name, value in scalars:
             if "/" not in name:
-                self._writer.add_scalar("scalars/" + name, value, step)
+                self._writer.add_scalar("scalars/" + name, value, iters)
             else:
-                self._writer.add_scalar(name, value, step)
+                self._writer.add_scalar(name, value, iters)
         for name, value in self._images.items():
-            self._writer.add_image(name, value, step)
+            self._writer.add_image(name, value, iters)
         for name, value in self._videos.items():
             name = name if isinstance(name, str) else name.decode("utf-8")
             if np.issubdtype(value.dtype, np.floating):
                 value = np.clip(255 * value, 0, 255).astype(np.uint8)
             B, T, H, W, C = value.shape
             value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
-            self._writer.add_video(name, value, step, 16)
+            self._writer.add_video(name, value, iters, 16)
 
         self._writer.flush()
         self._scalars = {}
         self._images = {}
         self._videos = {}
 
-    def _compute_fps(self, step):
-        if self._last_step is None:
-            self._last_time = time.time()
-            self._last_step = step
-            return 0
-        steps = step - self._last_step
-        duration = time.time() - self._last_time
-        self._last_time += duration
-        self._last_step = step
-        return steps / duration
+    def offline_scalar(self, name, value, iters):
+        self._writer.add_scalar("scalars/" + name, value, iters)
 
-    def offline_scalar(self, name, value, step):
-        self._writer.add_scalar("scalars/" + name, value, step)
-
-    def offline_video(self, name, value, step):
+    def offline_video(self, name, value, iters):
         if np.issubdtype(value.dtype, np.floating):
             value = np.clip(255 * value, 0, 255).astype(np.uint8)
         B, T, H, W, C = value.shape
         value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
-        self._writer.add_video(name, value, step, 16)
+        self._writer.add_video(name, value, iters, 16)
 
 
 def simulate(
         agent,
         env,
         cache,
-        directory,
         logger,
-        is_eval=False,
-        limit=None,
-        steps=0,
-        episodes=0,
+        training=False,
+        episode_length=1,
         state=None,
 ):
     env: EnvBase
     # initialize or unpack simulation state
     if state is None:
-        step, episode = 0, 0
-        done = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
-        length = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
-        obs = [None] * env.num_envs
+        done = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        obs = env.reset()
         agent_state = None
-        reward = torch.zeros(env.num_envs, dtype=env.dtype, device=env.device)
     else:
-        step, episode, done, length, obs, agent_state, reward = state
-    while (steps and step < steps) or (episodes and episode < episodes):
-        # reset envs if necessary
-        if done.any():
-            results = env.reset()
-            t = results.copy()
-            # action will be added to transition in add_to_cache
-            t["reward"] = torch.zeros(env.num_envs, dtype=env.dtype, device=env.device)
-            t["discount"] = torch.ones(env.num_envs, dtype=env.dtype, device=env.device)
-            # initial state should be added to cache
-            add_to_cache(cache, env.id, t)
-            # replace obs with done by initial state
-            obs = results
+        obs, agent_state, done = state
 
+    for _ in range(episode_length):
         # step agents
         obs = {key: val for key, val in obs.items() if "log" not in key}
-        action, agent_state = agent(obs, done, agent_state)
+        action, agent_state = agent(obs, agent_state)
+
         if isinstance(action, dict):
             action = {k: action[k].detach() for k in action}
         else:
             action = action.detach()
-
         # step envs
         obs, reward, done, info = env.step(action)
-        episode += int(done.sum())
-        length += 1
-        step += env.num_envs
-        length *= (1 - done.long())
         # add to cache
         obs = {key: val for key, val in obs.items() if "log" not in key}
         transition = obs.copy()
@@ -191,10 +154,8 @@ def simulate(
             indices = [index for index, d in enumerate(done) if d]
             # logging for done episode
             for i in indices:
-                save_episodes(directory, {env.id: cache[env.id]})
                 length = len(cache[env.id]["reward"]) - 1
                 score = torch.mean(torch.sum(torch.stack(cache[env.id]["reward"], dim=0), dim=0)).item()
-                video = cache[env.id].get("images", None)
                 # record logs given from environments
                 for key in list(info.keys()):
                     if "log" in key:
@@ -208,38 +169,17 @@ def simulate(
                                 key, info[key]
                             )
 
-                if not is_eval:
-                    step_in_dataset = erase_over_episodes(cache, limit)
-                    logger.scalar(f"dataset_size", step_in_dataset)
+                if training:
                     logger.scalar(f"train_return", score)
-                    logger.scalar(f"train_length", length)
-                    logger.scalar(f"train_episodes", len(cache))
-                    logger.write(step=logger.step)
                 else:
                     if not "eval_lengths" in locals():
-                        eval_lengths = []
                         eval_scores = []
                         eval_done = False
                     # start counting scores for evaluation
                     eval_scores.append(score)
-                    eval_lengths.append(length)
-
                     score = sum(eval_scores) / len(eval_scores)
-                    length_eval = sum(eval_lengths) / len(eval_lengths)
-                    # logger.video(f"eval_policy", np.array(video)[None])
 
-                    if len(eval_scores) >= episodes and not eval_done:
-                        logger.scalar(f"eval_return", score)
-                        logger.scalar(f"eval_length", length_eval)
-                        logger.scalar(f"eval_episodes", len(eval_scores))
-                        logger.write(step=logger.step)
-                        eval_done = True
-    if is_eval:
-        # keep only last item for saving memory. this cache is used for video_pred later
-        while len(cache) > 1:
-            # FIFO
-            cache.popitem(last=False)
-    return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
+    return obs, agent_state, done
 
 
 def add_to_cache(cache, id, transition):
@@ -268,6 +208,10 @@ def erase_over_episodes(cache, dataset_size):
         else:
             del cache[key]
     return step_in_dataset
+
+
+def clean_cache(cache, id):
+    cache[id] = collections.OrderedDict()
 
 
 def convert(value, precision=32):
