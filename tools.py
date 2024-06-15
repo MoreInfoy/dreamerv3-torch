@@ -128,6 +128,7 @@ def simulate(
     else:
         obs, agent_state, done = state
 
+    time_env_step = 0.0
     for _ in range(episode_length):
         # step agents
         obs = {key: val for key, val in obs.items() if "log" not in key}
@@ -138,7 +139,9 @@ def simulate(
         else:
             action = action.detach()
         # step envs
+        start_time = time.time()
         obs, reward, done, info = env.step(action)
+        time_env_step += time.time() - start_time
         # add to cache
         obs = {key: val for key, val in obs.items() if "log" not in key}
         transition = obs.copy()
@@ -178,7 +181,7 @@ def simulate(
                     # start counting scores for evaluation
                     eval_scores.append(score)
                     score = sum(eval_scores) / len(eval_scores)
-
+    print(f'time for env step: {time_env_step}')
     return obs, agent_state, done
 
 

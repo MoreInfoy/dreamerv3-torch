@@ -1,8 +1,8 @@
 name: "humanoid_locomotion"
-headless: True
+headless: False
 test: False
 export_policy: True
-num_envs: 6
+num_envs: 64
 env_dt: 0.01
 # set default task and default training config based on task
 defaults:

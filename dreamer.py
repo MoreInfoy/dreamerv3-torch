@@ -1,4 +1,5 @@
 import collections
+import copy
 import functools
 import os
 import pathlib
@@ -19,6 +20,7 @@ from omegaconf import DictConfig
 import torch
 from torch import nn
 from envs.prometheus import SOURCE_DIR
+import time
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -93,13 +95,17 @@ class Dreamer(nn.Module):
 
     def train_model(self, data):
         metrics = {}
-        post, context, mets = self._wm.train_model(data)
+        for _ in range(self._config.num_learning_epochs):
+            post, context, mets = self._wm.train_model(copy.deepcopy(data))
         metrics.update(mets)
-        start = post
+        start = {k: v[:, 0].unsqueeze(1) for k, v in post.items()}
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
-        metrics.update(self._task_behavior.train_model(start, reward)[-1])
+
+        for _ in range(self._config.num_learning_epochs):
+            metrics.update(self._task_behavior.train_model(copy.deepcopy(start), reward)[-1])
+
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
             metrics.update({"expl_" + key: value for key, value in mets.items()})
@@ -155,11 +161,13 @@ def main(cfg: DictConfig) -> None:
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
 
+    print("Start training.")
+    training_agent = functools.partial(agent, training=True)
+
     # make sure eval will be executed once after config.steps
     for iter_ in range(config.max_iterations):
-        logger.write()
-        print("Start training.")
-        training_agent = functools.partial(agent, training=True)
+        start = time.time()
+
         state = tools.simulate(
             training_agent,
             env,
@@ -173,7 +181,12 @@ def main(cfg: DictConfig) -> None:
         data = {
             k: torch.stack(v, dim=1) for k, v in episodes.items() if "log" not in k
         }
+        print(f"time cost for data collection: {time.time() - start} s")
+        start = time.time()
+
         agent.train_model(data)
+        print(f"time cost for model training: {time.time() - start} s")
+
         items_to_save = {
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
